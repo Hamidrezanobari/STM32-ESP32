@@ -13,104 +13,168 @@ HardwareSerial SerialPort(2);
 
 // --- Web Server Setup ---
 WebServer server(80);
-// متغیر سراسری برای نگه داشتن داده خام
+// Global variable to hold raw sensor data
 String lastReceivedData = "MPU -> Accel: X=0.00 Y=0.00 Z=0.00 | BMP -> Temp=25.00C | Press=1000.00hPa"; 
 
 /**
  * @brief Handles the root URL ('/') and returns the HTML page with Chart.js setup.
  */
 void handleRoot() {
-  // HTML page containing the chart canvas and JavaScript for AJAX updates
-  // این بخش حاوی تمام کد HTML و جاوا اسکریپت Chart.js برای رسم نمودار است.
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Real-Time MPU6050 Acceleration Chart</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    <title>Real-Time Gauge & MPU Position</title>
+    <script src="https://cdn.jsdelivr.net/npm/raphael@2.3.0/raphael.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/justgage@1.5.1/dist/justgage.min.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; }
-        .chart-container { width: 80%; margin: 20px auto; }
-        .data-display { margin-top: 20px; font-size: 1.2em; font-weight: bold; }
+        body { 
+            font-family: Tahoma, sans-serif; 
+            text-align: center; 
+            background-color: #f4f4f9;
+        }
+        h1 { color: #333; }
+        /* Removing data-display class is no longer needed */
+        .container { 
+            display: flex; 
+            justify-content: space-around; 
+            align-items: flex-start; 
+            flex-wrap: wrap;
+            padding: 20px;
+        }
+        .panel {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            margin: 15px;
+            width: 45%;
+            min-width: 300px;
+        }
+        
+        /* --- MPU Cube CSS (For 3D Visualization) --- */
+        .cube-container {
+            perspective: 1000px; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 250px;
+        }
+        .cube {
+            width: 100px;
+            height: 100px;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.2s ease-out; 
+        }
+        .face {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            background: rgba(100, 149, 237, 0.7);
+            border: 2px solid royalblue;
+            line-height: 100px;
+            font-size: 14px;
+            color: white;
+            text-align: center;
+            font-weight: bold;
+        }
+        .front  { transform: rotateY(0deg) translateZ(50px); }
+        .back   { transform: rotateY(180deg) translateZ(50px); }
+        .right  { transform: rotateY(90deg) translateZ(50px); }
+        .left   { transform: rotateY(-90deg) translateZ(50px); }
+        .top    { transform: rotateX(90deg) translateZ(50px); }
+        .bottom { transform: rotateX(-90deg) translateZ(50px); }
+
     </style>
 </head>
 <body>
-    <h1>Real-Time MPU6050 Acceleration (X-Axis)</h1>
-    <div class="data-display" id="latestData">Waiting for data...</div>
-    
-    <div class="chart-container">
-        <canvas id="accelChart"></canvas>
+    <h1>Real-Time Sensor Visualization</h1>
+    <div class="container">
+        <div class="panel">
+            <h2>BMP180: Atmospheric Pressure</h2>
+            <div id="gaugeContainer" style="width: 100%; height: 200px;"></div>
+            <div id="pressureValue">--- hPa</div>
+        </div>
+
+        <div class="panel">
+            <h2>MPU6050: 3D Position (Accel X, Y, Z)</h2>
+            <div class="cube-container">
+                <div class="cube" id="mpuCube">
+                    <div class="face front">FRONT</div>
+                    <div class="face back">BACK</div>
+                    <div class="face right">RIGHT</div>
+                    <div class="face left">LEFT</div>
+                    <div class="face top">TOP</div>
+                    <div class="face bottom">BOTTOM</div>
+                </div>
+            </div>
+            <div id="accelValues">Accel X: -- Y: -- Z: --</div>
+        </div>
     </div>
 
     <script>
-        // --- Chart.js Setup ---
-        const MAX_DATA_POINTS = 20; // حداکثر تعداد نقاط روی نمودار
-        let timeLabels = [];
-        let accelXData = [];
-
-        const ctx = document.getElementById('accelChart').getContext('2d');
-        const accelChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: timeLabels,
-                datasets: [{
-                    label: 'Acceleration X (g)', // تغییر نام نمودار
-                    data: accelXData,
-                    borderColor: 'rgb(255, 99, 132)', // تغییر رنگ نمودار
-                    tension: 0.1
-                }]
-            },
-            options: {
-                animation: false,
-                scales: {
-                    y: {
-                        beginAtZero: false,
-                        title: {
-                            display: true,
-                            text: 'Acceleration (g)'
-                        }
-                    }
-                }
-            }
+        // --- 1. Gauge Initialization (Pressure) ---
+        const gauge = new JustGage({
+            id: 'gaugeContainer',
+            value: 1013, 
+            min: 950, 
+            max: 1050, 
+            title: 'Pressure',
+            label: 'hPa',
+            pointer: true,
+            gaugeWidthScale: 0.6,
+            levelColors: ['#ff0000', '#f9c802', '#a9d70b']
         });
-        
-        // --- AJAX Function to Fetch Data ---
+
+        // --- 2. AJAX Function and Data Parsing ---
+        const MPU_CUBE = document.getElementById('mpuCube');
+        const PRESSURE_DISPLAY = document.getElementById('pressureValue');
+        const ACCEL_DISPLAY = document.getElementById('accelValues');
+        const MAX_PITCH_ROLL = 90; 
+
         function fetchData() {
             fetch('/data')
                 .then(response => response.text())
                 .then(rawText => {
-                    document.getElementById('latestData').innerText = 'Last Data: ' + rawText;
+                    // Raw data update line removed or disabled:
+                    // document.getElementById('latestData').innerText = 'Last Data: ' + rawText;
                     
-                    // الگوی منظم (Regex) برای استخراج مقدار شتاب X.
-                    // STM32 output format: "MPU -> Accel: X=1.05 Y=..."
-                    // این regex مقدار عددی بعد از "X=" را تا اولین فاصله یا حرف بعدی استخراج می‌کند.
+                    // --- Parsing Pressure (BMP180) ---
+                    const pressMatch = rawText.match(/Press=([\-.\d]+)hPa/);
+                    if (pressMatch && pressMatch[1]) {
+                        const newPressure = parseFloat(pressMatch[1]);
+                        gauge.refresh(newPressure); 
+                        PRESSURE_DISPLAY.innerText = newPressure.toFixed(2) + ' hPa';
+                    }
+
+                    // --- Parsing MPU (X, Y, Z Acceleration) ---
                     const accelXMatch = rawText.match(/Accel: X=([\-.\d]+)/);
-                    
-                    if (accelXMatch && accelXMatch[1]) {
-                        const newAccelX = parseFloat(accelXMatch[1]);
+                    const accelYMatch = rawText.match(/Y=([\-.\d]+)/); 
+                    const accelZMatch = rawText.match(/Z=([\-.\d]+)/);
+
+                    if (accelXMatch && accelYMatch && accelZMatch) {
+                        const accelX = parseFloat(accelXMatch[1]);
+                        const accelY = parseFloat(accelYMatch[1]);
+                        const accelZ = parseFloat(accelZMatch[1]);
+
+                        ACCEL_DISPLAY.innerText = `Accel X: ${accelX.toFixed(2)} Y: ${accelY.toFixed(2)} Z: ${accelZ.toFixed(2)}`;
+
+                        // --- 3. MPU Position Update (3D Rotation) ---
+                        let roll = accelY * 45; 
+                        let pitch = accelX * 45; 
+
+                        roll = Math.max(-MAX_PITCH_ROLL, Math.min(MAX_PITCH_ROLL, roll));
+                        pitch = Math.max(-MAX_PITCH_ROLL, Math.min(MAX_PITCH_ROLL, pitch));
                         
-                        // Add new data point
-                        const now = new Date();
-                        const timeString = now.toLocaleTimeString();
-                        
-                        timeLabels.push(timeString);
-                        accelXData.push(newAccelX); // استفاده از داده شتاب
-                        
-                        // Keep data array size manageable
-                        if (timeLabels.length > MAX_DATA_POINTS) {
-                            timeLabels.shift();
-                            accelXData.shift();
-                        }
-                        
-                        // Update the chart
-                        accelChart.update();
+                        MPU_CUBE.style.transform = `rotateX(${-roll}deg) rotateY(${pitch}deg) rotateZ(0deg)`;
                     }
                 })
                 .catch(error => console.error('Error fetching data:', error));
         }
 
-        // Fetch data every 500 milliseconds (0.5 second)
+        // Fetch data every 200 milliseconds (0.2 second)
         setInterval(fetchData, 200); 
     </script>
 </body>
@@ -118,13 +182,16 @@ void handleRoot() {
 )rawliteral";
   server.send(200, "text/html", html);
 }
-
 /**
- * @brief Handles the '/data' URL and returns only the raw sensor data string.
+ * @brief Handles the '/data' URL. Returns only the raw sensor data string (text/plain).
+ * This is the AJAX endpoint used by the JavaScript function fetchData().
  */
 void handleData() {
   server.send(200, "text/plain", lastReceivedData);
 }
+/**
+ * @brief Handles the '/data' URL and returns only the raw sensor data string.
+ */
 
 
 void setup() {
