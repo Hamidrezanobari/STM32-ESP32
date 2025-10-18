@@ -39,8 +39,8 @@ The system consists of two microcontrollers:
 
 ```mermaid
 graph TD
-    A[MPU6050 Accelerometer Gyroscope] --> B[STM32F4 Sensor Node]
-    C[BMP280 Pressure Temperature] --> B
+    A[MPU6050] --> B[STM32F4 Sensor Node]
+    C[BMP280] --> B
     B --> D[ESP32 WiFi Gateway]
     D --> E[Internet Cloud MQTT Broker]
     E --> F[User Dashboard]
