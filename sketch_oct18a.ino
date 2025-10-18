@@ -3,8 +3,8 @@
 #include <WebServer.h>
 
 // --- WiFi Settings ---
-const char* ssid = "OPTUS_49DB18N";         
-const char* password = "shiny49545zr"; 
+const char* ssid = "YOUR_WIFI_SSID";         
+const char* password = "YOUR_WIFI_PASSWORD";
 
 // --- UART Settings ---
 #define RXD2 16 
